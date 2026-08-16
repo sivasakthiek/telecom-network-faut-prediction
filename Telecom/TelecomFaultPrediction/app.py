@@ -1286,20 +1286,20 @@ def render_overview_page():
         col_s1, col_s2, col_s3 = st.columns([2, 1, 1])
         with col_s1:
             search_query = st.text_input(
-                "Search Network ID or Location",
+                "Search Map (ID or Location)",
                 placeholder="e.g. 11066, or location 481",
                 key="map_search_query"
             )
         with col_s2:
             status_filter = st.selectbox(
-                "Filter by Status",
+                "Filter Map by Status",
                 ["All", "Healthy", "Warning", "High Risk", "Critical"],
                 key="map_status_filter"
             )
         with col_s3:
             sorted_locations = sorted(list(df_topo['location'].unique()), key=lambda x: int(re.search(r'\d+', x).group(0)) if re.search(r'\d+', x) else x)
             location_filter = st.selectbox(
-                "Filter by Location",
+                "Filter Map by Location",
                 ["All Locations"] + sorted_locations,
                 key="map_location_filter"
             )
@@ -2535,6 +2535,7 @@ def render_detail_page(selected_device_id):
 
 # ROUTING & EXECUTION ENTRY POINT
 # ==============================================================================
+if __name__ == '__main__':
     if 'selected_device_id' not in st.session_state:
         st.session_state.selected_device_id = None
     if 'selected_map_device_id' not in st.session_state:
