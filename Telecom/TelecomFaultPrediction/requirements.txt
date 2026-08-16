@@ -1,0 +1,15 @@
+pandas
+numpy
+scikit-learn
+xgboost
+lightgbm
+shap
+joblib
+streamlit
+plotly
+matplotlib
+seaborn
+faiss-cpu
+sentence-transformers
+openai
+python-dotenv

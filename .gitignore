@@ -1,0 +1,25 @@
+# Virtual Environment
+venv/
+ENV/
+env/
+.env
+
+# Python Caching
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# IDE/System files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Large Model / DB Artifacts
+*.pkl
+*.index
+*.png
+*.zip
+*.log
