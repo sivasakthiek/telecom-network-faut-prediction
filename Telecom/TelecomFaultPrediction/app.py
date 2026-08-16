@@ -15,6 +15,7 @@ from sklearn.model_selection import train_test_split
 from fpdf import FPDF
 import zipfile
 import io
+import re
 
 # Add project root to sys.path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
