@@ -1113,6 +1113,792 @@ def render_overview_page():
         
         st.plotly_chart(fig, use_container_width=True)
         
+        # --- 4b. Network Operations Map Section ---
+        @st.cache_data
+        def load_topology_data():
+            import re
+            data_dir = os.path.join(os.path.dirname(__file__), "data", "raw")
+            test_path = os.path.join(data_dir, "test.csv")
+            summaries_path = os.path.join(os.path.dirname(__file__), "models", "device_summaries.pkl")
+            
+            test_df = pd.read_csv(test_path)
+            dev_sums = joblib.load(summaries_path)
+            mapping = dev_sums['mapping']
+            
+            records = []
+            for _, row in test_df.iterrows():
+                dev_id = int(row['id'])
+                loc = row['location']
+                if dev_id in mapping:
+                    summary = mapping[dev_id]['summary']
+                    
+                    # Parse health score
+                    m_score = re.search(r'Health Score:\s*([\d\.]+)\s*\(([^\)]+)\)', summary)
+                    score = float(m_score.group(1)) if m_score else 100.0
+                    
+                    # Parse other metrics
+                    m_sev = re.search(r'Fault Severity:\s*(\d+)', summary)
+                    pred_class = int(m_sev.group(1)) if m_sev else 0
+                    
+                    m_rep = re.search(r'Reported Severity:\s*([^\n]+)', summary)
+                    severity_type = m_rep.group(1) if m_rep else ""
+                    
+                    m_res = re.search(r'Resource Type:\s*([^\n]+)', summary)
+                    resource_type = m_res.group(1) if m_res else ""
+                    
+                    m_evt = re.search(r'Event Types:\s*([^\n]+)', summary)
+                    event_types = m_evt.group(1) if m_evt else ""
+
+                    m_log = re.search(r'Log Features:\s*([^\n]+)', summary)
+                    log_features = m_log.group(1) if m_log else ""
+                    
+                    if score >= 70:
+                        status_4 = "Healthy"
+                    elif score >= 40:
+                        status_4 = "Warning"
+                    elif score >= 15:
+                        status_4 = "High Risk"
+                    else:
+                        status_4 = "Critical"
+                        
+                    records.append({
+                        'id': dev_id,
+                        'location': loc,
+                        'health_score': score,
+                        'status': status_4,
+                        'predicted_class': pred_class,
+                        'severity_type': severity_type,
+                        'resource_type': resource_type,
+                        'event_types': event_types,
+                        'log_features': log_features,
+                        'summary_text': summary
+                    })
+            return pd.DataFrame(records)
+
+        df_topo = load_topology_data()
+
+        # Create location clusters for canvas visualization
+        clusters = []
+        grouped = df_topo.groupby('location')
+        for loc, group in grouped:
+            group_sorted = group.sort_values(by='health_score', ascending=True)
+            devices = []
+            for _, row in group_sorted.iterrows():
+                devices.append({
+                    'id': int(row['id']),
+                    'score': float(row['health_score']),
+                    'status': str(row['status']),
+                    'fault_severity': int(row['predicted_class'])
+                })
+            clusters.append({
+                'name': str(loc).upper().replace("LOCATION ", "LOC-"),
+                'raw_name': str(loc),
+                'devices': devices
+            })
+            
+        # Sort clusters by name numerically
+        def cluster_sort_key(c):
+            m = re.search(r'\d+', c['name'])
+            return int(m.group(0)) if m else c['name']
+
+        clusters.sort(key=cluster_sort_key)
+        import json
+        clusters_json = json.dumps(clusters)
+
+        st.markdown("""
+        <div class="noc-panel">
+            <div class="noc-panel-title">📡 Network Operations Map</div>
+            <div class="noc-panel-subtitle">
+                Interactive logical topology mapping network devices to their monitored locations. Pan, scroll to zoom, and hover or search for details.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Summary Row inside the Map Area
+        t_devices = len(df_topo)
+        t_healthy = len(df_topo[df_topo['status'] == 'Healthy'])
+        t_warning = len(df_topo[df_topo['status'] == 'Warning'])
+        t_high_risk = len(df_topo[df_topo['status'] == 'High Risk'])
+        t_critical = len(df_topo[df_topo['status'] == 'Critical'])
+
+        st.markdown(f"""
+        <style>
+        .map-kpi-container {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 15px;
+            background-color: {COLOR_SURFACE};
+            border: 1px solid {COLOR_BORDER};
+            padding: 10px 20px;
+            border-radius: 8px;
+        }}
+        .map-kpi-item {{
+            flex: 1;
+            min-width: 140px;
+            text-align: center;
+            font-family: 'JetBrains Mono', monospace;
+            border-right: 1px solid {COLOR_BORDER};
+        }}
+        .map-kpi-item:last-child {{
+            border-right: none;
+        }}
+        .map-kpi-val {{
+            font-size: 1.25rem;
+            font-weight: bold;
+            color: {COLOR_TEXT_PRI};
+        }}
+        .map-kpi-lbl {{
+            font-size: 0.75rem;
+            color: {COLOR_TEXT_MUT};
+            text-transform: uppercase;
+        }}
+        .kpi-h {{ color: #10B981; }}
+        .kpi-w {{ color: #FBBF24; }}
+        .kpi-hr {{ color: #F97316; }}
+        .kpi-c {{ color: #EF4444; }}
+        </style>
+        <div class="map-kpi-container">
+            <div class="map-kpi-item">
+                <div class="map-kpi-val">{t_devices:,}</div>
+                <div class="map-kpi-lbl">Total Devices</div>
+            </div>
+            <div class="map-kpi-item">
+                <div class="map-kpi-val kpi-h">{t_healthy:,}</div>
+                <div class="map-kpi-lbl">Healthy</div>
+            </div>
+            <div class="map-kpi-item">
+                <div class="map-kpi-val kpi-w">{t_warning:,}</div>
+                <div class="map-kpi-lbl">Warning</div>
+            </div>
+            <div class="map-kpi-item">
+                <div class="map-kpi-val kpi-hr">{t_high_risk:,}</div>
+                <div class="map-kpi-lbl">High Risk</div>
+            </div>
+            <div class="map-kpi-item">
+                <div class="map-kpi-val kpi-c">{t_critical:,}</div>
+                <div class="map-kpi-lbl">Critical</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Search & Filter Row
+        col_s1, col_s2, col_s3 = st.columns([2, 1, 1])
+        with col_s1:
+            search_query = st.text_input(
+                "Search Network ID or Location",
+                placeholder="e.g. 11066, or location 481",
+                key="map_search_query"
+            )
+        with col_s2:
+            status_filter = st.selectbox(
+                "Filter by Status",
+                ["All", "Healthy", "Warning", "High Risk", "Critical"],
+                key="map_status_filter"
+            )
+        with col_s3:
+            sorted_locations = sorted(list(df_topo['location'].unique()), key=lambda x: int(re.search(r'\d+', x).group(0)) if re.search(r'\d+', x) else x)
+            location_filter = st.selectbox(
+                "Filter by Location",
+                ["All Locations"] + sorted_locations,
+                key="map_location_filter"
+            )
+            
+        # Parse search query
+        search_dev_id = None
+        if search_query.strip():
+            if search_query.strip().isdigit():
+                search_val = int(search_query.strip())
+                if search_val in df_topo['id'].values:
+                    search_dev_id = search_val
+                    st.session_state.selected_map_device_id = search_val
+                else:
+                    st.error(f"Device ID #{search_val} not found in database.")
+            elif "location" in search_query.lower() or re.match(r'^\d+$', search_query.strip()):
+                m_loc_digits = re.search(r'\d+', search_query)
+                if m_loc_digits:
+                    loc_target = f"location {m_loc_digits.group(0)}"
+                    if loc_target in df_topo['location'].values:
+                        location_filter = loc_target
+                    else:
+                        st.error(f"Location {loc_target} not found in database.")
+
+        # Colors mapping dictionary
+        colors_status = {
+            'Healthy': '#10B981',
+            'Warning': '#FBBF24',
+            'High Risk': '#F97316',
+            'Critical': '#EF4444'
+        }
+
+        # Responsive Columns Layout
+        col_map_canvas, col_map_details = st.columns([3, 1])
+        
+        with col_map_canvas:
+            html_code = """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+    body {
+        margin: 0;
+        padding: 0;
+        background-color: #111317;
+        color: #e2e2e8;
+        font-family: 'JetBrains Mono', monospace;
+        overflow: hidden;
+        user-select: none;
+    }
+    #canvas-container {
+        position: relative;
+        width: 100%;
+        height: 600px;
+        background: radial-gradient(circle, #1a1c22 0%, #111317 100%);
+        border: 1px solid #3b494b;
+        border-radius: 8px;
+    }
+    canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        cursor: grab;
+    }
+    canvas:active {
+        cursor: grabbing;
+    }
+    .tooltip {
+        position: absolute;
+        display: none;
+        background: rgba(30, 32, 36, 0.95);
+        backdrop-filter: blur(10px);
+        border: 1px solid #3b494b;
+        border-radius: 6px;
+        padding: 10px;
+        font-size: 11px;
+        color: #e2e2e8;
+        pointer-events: none;
+        z-index: 1000;
+        min-width: 220px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+    .tooltip-title {
+        font-weight: bold;
+        color: #00dbe9;
+        border-bottom: 1px solid #3b494b;
+        padding-bottom: 4px;
+        margin-bottom: 6px;
+    }
+    .tooltip-row {
+        margin: 3px 0;
+        display: flex;
+        justify-content: space-between;
+    }
+    .tooltip-label {
+        color: #b9cacb;
+    }
+    .tooltip-val {
+        font-weight: bold;
+    }
+    .controls {
+        position: absolute;
+        bottom: 15px;
+        right: 15px;
+        display: flex;
+        gap: 8px;
+        z-index: 10;
+    }
+    .control-btn {
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        background: rgba(30, 32, 36, 0.85);
+        border: 1px solid #3b494b;
+        color: #e2e2e8;
+        font-size: 16px;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .control-btn:hover {
+        background: #00dbe9;
+        color: #111317;
+        border-color: #00dbe9;
+        box-shadow: 0 0 10px rgba(0, 219, 233, 0.4);
+    }
+</style>
+</head>
+<body>
+<div id="canvas-container">
+    <canvas id="topoCanvas"></canvas>
+    <div class="tooltip" id="tooltip"></div>
+    <div class="controls">
+        <div class="control-btn" onclick="zoomIn()" title="Zoom In">+</div>
+        <div class="control-btn" onclick="zoomOut()" title="Zoom Out">-</div>
+        <div class="control-btn" onclick="resetView()" title="Fit View">⊙</div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('topoCanvas');
+    const ctx = canvas.getContext('2d');
+    const tooltip = document.getElementById('tooltip');
+    
+    const clusters = %CLUSTERS_JSON%;
+    const selectedDeviceId = %SELECTED_DEVICE_ID%;
+    const searchDevId = %SEARCH_DEVICE_ID%;
+    const statusFilter = "%STATUS_FILTER%";
+    const locationFilter = "%LOCATION_FILTER%";
+    
+    const colors = {
+        'Healthy': '#10B981',
+        'Warning': '#FBBF24',
+        'High Risk': '#F97316',
+        'Critical': '#EF4444',
+        'Muted': '#4b5563'
+    };
+    
+    const cols = 20;
+    const spacingX = 350;
+    const spacingY = 300;
+    
+    let panX = 0;
+    let panY = 0;
+    let zoomScale = 0.15;
+    
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    
+    let hoveredDevice = null;
+    
+    function resizeCanvas() {
+        canvas.width = canvas.parentElement.clientWidth;
+        canvas.height = canvas.parentElement.clientHeight;
+    }
+    
+    function roundRect(x, y, w, h, r) {
+        if (w < 2 * r) r = w / 2;
+        if (h < 2 * r) r = h / 2;
+        ctx.beginPath();
+        ctx.moveTo(x+r, y);
+        ctx.arcTo(x+w, y,   x+w, y+h, r);
+        ctx.arcTo(x+w, y+h, x,   y+h, r);
+        ctx.arcTo(x,   y+h, x,   y,   r);
+        ctx.arcTo(x,   y,   x+w, y,   r);
+        ctx.closePath();
+    }
+    
+    function initLayout() {
+        clusters.forEach((c, index) => {
+            const gridX = index % cols;
+            const gridY = Math.floor(index / cols);
+            c.x = gridX * spacingX + 200;
+            c.y = gridY * spacingY + 200;
+            
+            const dev_cols = Math.ceil(Math.sqrt(c.devices.length));
+            const dev_rows = Math.ceil(c.devices.length / dev_cols);
+            c.width = Math.max(120, dev_cols * 24 + 20);
+            c.height = Math.max(80, dev_rows * 24 + 45);
+            c.dev_cols = dev_cols;
+            
+            c.devices.forEach((d, dIdx) => {
+                const dc = dIdx % dev_cols;
+                const dr = Math.floor(dIdx / dev_cols);
+                d.rx = -c.width/2 + 15 + dc * 24;
+                d.ry = -c.height/2 + 45 + dr * 24;
+                
+                d.x = c.x + d.rx;
+                d.y = c.y + d.ry;
+            });
+        });
+        
+        let focusTarget = null;
+        let zoomTo = 0.15;
+        if (searchDevId) {
+            focusTarget = findDeviceCluster(searchDevId);
+            zoomTo = 1.0;
+        } else if (selectedDeviceId) {
+            focusTarget = findDeviceCluster(selectedDeviceId);
+            zoomTo = 1.0;
+        } else if (locationFilter && locationFilter !== 'All Locations') {
+            focusTarget = clusters.find(c => c.raw_name.toLowerCase() === locationFilter.toLowerCase());
+            zoomTo = 1.0;
+        }
+        
+        if (focusTarget) {
+            zoomScale = zoomTo;
+            centerCameraOn(focusTarget);
+        } else {
+            fitAll();
+        }
+    }
+    
+    function findDeviceCluster(devId) {
+        for (let c of clusters) {
+            if (c.devices.some(d => d.id === devId)) {
+                return c;
+            }
+        }
+        return null;
+    }
+    
+    function centerCameraOn(target) {
+        panX = canvas.width / 2 - target.x * zoomScale;
+        panY = canvas.height / 2 - target.y * zoomScale;
+    }
+    
+    function fitAll() {
+        if (clusters.length === 0) return;
+        panX = 50;
+        panY = 50;
+        zoomScale = Math.min(canvas.width / 7500, canvas.height / 16000);
+        if (zoomScale < 0.05) zoomScale = 0.05;
+        if (zoomScale > 0.4) zoomScale = 0.4;
+    }
+    
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.save();
+        ctx.translate(panX, panY);
+        ctx.scale(zoomScale, zoomScale);
+        
+        const wLeft = (-panX) / zoomScale;
+        const wRight = (canvas.width - panX) / zoomScale;
+        const wTop = (-panY) / zoomScale;
+        const wBottom = (canvas.height - panY) / zoomScale;
+        
+        ctx.strokeStyle = '#252932';
+        ctx.lineWidth = 2;
+        clusters.forEach((c, index) => {
+            const rightNeighbor = clusters[index + 1];
+            if (rightNeighbor && (index % cols < cols - 1)) {
+                ctx.beginPath();
+                ctx.moveTo(c.x, c.y);
+                ctx.lineTo(rightNeighbor.x, rightNeighbor.y);
+                ctx.stroke();
+            }
+            const downNeighbor = clusters[index + cols];
+            if (downNeighbor) {
+                ctx.beginPath();
+                ctx.moveTo(c.x, c.y);
+                ctx.lineTo(downNeighbor.x, downNeighbor.y);
+                ctx.stroke();
+            }
+        });
+        
+        clusters.forEach(c => {
+            const halfW = c.width / 2;
+            const halfH = c.height / 2;
+            if (c.x + halfW < wLeft || c.x - halfW > wRight || c.y + halfH < wTop || c.y - halfH > wBottom) {
+                return;
+            }
+            
+            const isLocMatch = (!locationFilter || locationFilter === 'All Locations' || c.raw_name.toLowerCase() === locationFilter.toLowerCase());
+            
+            let hasCritical = c.devices.some(d => d.status === 'Critical' && (statusFilter === 'All' || statusFilter === 'Critical'));
+            let hasWarning = c.devices.some(d => d.status === 'Warning' && (statusFilter === 'All' || statusFilter === 'Warning'));
+            let hasHighRisk = c.devices.some(d => d.status === 'High Risk' && (statusFilter === 'All' || statusFilter === 'High Risk'));
+            
+            let cardBorderColor = '#3b494b';
+            let cardBgColor = 'rgba(30, 32, 36, 0.85)';
+            
+            if (!isLocMatch) {
+                cardBgColor = 'rgba(20, 22, 26, 0.3)';
+                cardBorderColor = '#252932';
+            } else if (hasCritical) {
+                cardBorderColor = 'rgba(239, 68, 68, 0.6)';
+            } else if (hasHighRisk) {
+                cardBorderColor = 'rgba(249, 115, 22, 0.6)';
+            } else if (hasWarning) {
+                cardBorderColor = 'rgba(251, 191, 36, 0.6)';
+            }
+            
+            ctx.fillStyle = cardBgColor;
+            roundRect(c.x - halfW, c.y - halfH, c.width, c.height, 8);
+            ctx.fill();
+            
+            ctx.strokeStyle = cardBorderColor;
+            ctx.lineWidth = isLocMatch ? 1.5 : 1;
+            ctx.stroke();
+            
+            if (zoomScale > 0.12) {
+                ctx.fillStyle = isLocMatch ? '#b9cacb' : '#4b5563';
+                ctx.font = 'bold 11px "JetBrains Mono", monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(c.name, c.x, c.y - halfH + 18);
+                
+                ctx.beginPath();
+                ctx.strokeStyle = isLocMatch ? '#3b494b' : '#252932';
+                ctx.lineWidth = 1;
+                ctx.moveTo(c.x - halfW + 10, c.y - halfH + 25);
+                ctx.lineTo(c.x + halfW - 10, c.y - halfH + 25);
+                ctx.stroke();
+            }
+            
+            c.devices.forEach(d => {
+                const isStatusMatch = (statusFilter === 'All' || d.status === statusFilter);
+                const isSelected = (d.id === selectedDeviceId);
+                const isSearch = (d.id === searchDevId);
+                const isActiveMatch = isLocMatch && isStatusMatch;
+                
+                let dotColor = colors[d.status];
+                let dotRadius = 6;
+                
+                if (!isActiveMatch) {
+                    dotColor = colors['Muted'];
+                    dotRadius = 3.5;
+                }
+                
+                if (hoveredDevice && hoveredDevice.id === d.id) {
+                    dotRadius = 8;
+                }
+                
+                if (isSelected || isSearch) {
+                    ctx.beginPath();
+                    ctx.arc(d.x, d.y, dotRadius + 5 + Math.sin(Date.now() / 150) * 2, 0, 2 * Math.PI);
+                    ctx.strokeStyle = isSearch ? '#EF4444' : '#00dbe9';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+                
+                ctx.beginPath();
+                ctx.arc(d.x, d.y, dotRadius, 0, 2 * Math.PI);
+                ctx.fillStyle = dotColor;
+                ctx.fill();
+                
+                if (zoomScale > 0.45 && isActiveMatch) {
+                    ctx.fillStyle = isSelected ? '#00dbe9' : '#e2e2e8';
+                    ctx.font = '9px "JetBrains Mono", monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(d.id, d.x, d.y - 8);
+                }
+            });
+        });
+        
+        ctx.restore();
+    }
+    
+    canvas.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        dragStartX = panX;
+        dragStartY = panY;
+    });
+    
+    window.addEventListener('mousemove', (e) => {
+        const bounds = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - bounds.left;
+        const mouseY = e.clientY - bounds.top;
+        
+        if (isDragging) {
+            panX = dragStartX + (e.clientX - startX);
+            panY = dragStartY + (e.clientY - startY);
+            tooltip.style.display = "none";
+            requestAnimationFrame(draw);
+            return;
+        }
+        
+        const worldX = (mouseX - panX) / zoomScale;
+        const worldY = (mouseY - panY) / zoomScale;
+        
+        let found = null;
+        for (let c of clusters) {
+            const halfW = c.width / 2;
+            const halfH = c.height / 2;
+            if (worldX >= c.x - halfW && worldX <= c.x + halfW && worldY >= c.y - halfH && worldY <= c.y + halfH) {
+                for (let d of c.devices) {
+                    const dx = worldX - d.x;
+                    const dy = worldY - d.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist <= 10) {
+                        found = {
+                            device: d,
+                            location: c.name,
+                            raw_location: c.raw_name
+                        };
+                        break;
+                    }
+                }
+            }
+            if (found) break;
+        }
+        
+        if (found) {
+            if (!hoveredDevice || hoveredDevice.id !== found.device.id) {
+                hoveredDevice = found.device;
+                tooltip.style.display = "block";
+                tooltip.style.left = (e.clientX + 15) + "px";
+                tooltip.style.top = (e.clientY + 15) + "px";
+                tooltip.innerHTML = `
+                    <div class="tooltip-title">DEVICE #${found.device.id}</div>
+                    <div class="tooltip-row"><span class="tooltip-label">Location:</span><span class="tooltip-val">${found.raw_location}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">Health Score:</span><span class="tooltip-val" style="color:${colors[found.device.status]}">${found.device.score}%</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">Severity:</span><span class="tooltip-val">${found.device.status}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">Fault Severity:</span><span class="tooltip-val">${found.device.fault_severity}</span></div>
+                    <div style="font-size:8px; color:#4b5563; margin-top:5px; text-align:center;">Click node to select device</div>
+                `;
+                requestAnimationFrame(draw);
+            } else {
+                tooltip.style.left = (e.clientX + 15) + "px";
+                tooltip.style.top = (e.clientY + 15) + "px";
+            }
+        } else {
+            if (hoveredDevice) {
+                hoveredDevice = null;
+                tooltip.style.display = "none";
+                requestAnimationFrame(draw);
+            }
+        }
+    });
+    
+    window.addEventListener('mouseup', () => {
+        isDragging = false;
+    });
+    
+    canvas.addEventListener('click', (e) => {
+        if (Math.abs(e.clientX - startX) > 6 || Math.abs(e.clientY - startY) > 6) {
+            return;
+        }
+        if (hoveredDevice) {
+            window.parent.location.search = "?selected_map_device_id=" + hoveredDevice.id;
+        }
+    });
+    
+    const minZoom = 0.03;
+    const maxZoom = 4.0;
+    
+    canvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const zoomIntensity = 0.1;
+        const mouseX = e.clientX - canvas.getBoundingClientRect().left;
+        const mouseY = e.clientY - canvas.getBoundingClientRect().top;
+        
+        const wheel = e.deltaY < 0 ? 1 : -1;
+        const zoomFactor = Math.exp(wheel * zoomIntensity);
+        
+        const newZoom = Math.min(Math.max(zoomScale * zoomFactor, minZoom), maxZoom);
+        
+        panX = mouseX - (mouseX - panX) * (newZoom / zoomScale);
+        panY = mouseY - (mouseY - panY) * (newZoom / zoomScale);
+        zoomScale = newZoom;
+        
+        requestAnimationFrame(draw);
+    }, { passive: false });
+    
+    window.zoomIn = function() {
+        const mouseX = canvas.width / 2;
+        const mouseY = canvas.height / 2;
+        const newZoom = Math.min(zoomScale * 1.3, maxZoom);
+        panX = mouseX - (mouseX - panX) * (newZoom / zoomScale);
+        panY = mouseY - (mouseY - panY) * (newZoom / zoomScale);
+        zoomScale = newZoom;
+        requestAnimationFrame(draw);
+    }
+    
+    window.zoomOut = function() {
+        const mouseX = canvas.width / 2;
+        const mouseY = canvas.height / 2;
+        const newZoom = Math.max(zoomScale / 1.3, minZoom);
+        panX = mouseX - (mouseX - panX) * (newZoom / zoomScale);
+        panY = mouseY - (mouseY - panY) * (newZoom / zoomScale);
+        zoomScale = newZoom;
+        requestAnimationFrame(draw);
+    }
+    
+    window.resetView = function() {
+        fitAll();
+        requestAnimationFrame(draw);
+    }
+    
+    function animate() {
+        requestAnimationFrame(draw);
+    }
+    
+    resizeCanvas();
+    window.addEventListener('resize', () => {
+        resizeCanvas();
+        requestAnimationFrame(draw);
+    });
+    
+    initLayout();
+    animate();
+</script>
+</body>
+</html>
+"""
+
+            html_code_filled = (
+                html_code
+                .replace("%CLUSTERS_JSON%", clusters_json)
+                .replace("%SELECTED_DEVICE_ID%", str(st.session_state.get("selected_map_device_id", "null")))
+                .replace("%SEARCH_DEVICE_ID%", str(search_dev_id) if search_dev_id else "null")
+                .replace("%STATUS_FILTER%", status_filter)
+                .replace("%LOCATION_FILTER%", location_filter)
+            )
+            import streamlit.components.v1 as components
+            components.html(html_code_filled, height=620, scrolling=False)
+            
+        with col_map_details:
+            selected_map_dev = st.session_state.get("selected_map_device_id")
+            if selected_map_dev and selected_map_dev in df_topo['id'].values:
+                dev_row = df_topo[df_topo['id'] == selected_map_dev].iloc[0]
+                s_color = colors_status.get(dev_row['status'], COLOR_TEXT_PRI)
+                
+                st.markdown(f"""
+                <div class="noc-panel" style="border-top: 3px solid {s_color}; margin-top:0px;">
+                    <div style="font-size:0.8rem; text-transform:uppercase; color:{COLOR_TEXT_MUT};">Device Inspection</div>
+                    <div style="font-size:1.4rem; font-weight:bold; color:{COLOR_TEXT_PRI}; margin-top:2px;">ID #{selected_map_dev}</div>
+                    <div style="margin-top:10px; border-bottom:1px solid {COLOR_BORDER}; padding-bottom:5px;"></div>
+                    <div style="margin-top:10px; display:flex; justify-content:space-between; font-size:0.85rem;">
+                        <span style="color:{COLOR_TEXT_MUT};">Location:</span>
+                        <strong style="color:{COLOR_TEXT_PRI};">{dev_row['location']}</strong>
+                    </div>
+                    <div style="margin-top:5px; display:flex; justify-content:space-between; font-size:0.85rem;">
+                        <span style="color:{COLOR_TEXT_MUT};">Status:</span>
+                        <strong style="color:{s_color};">{dev_row['status']}</strong>
+                    </div>
+                    <div style="margin-top:5px; display:flex; justify-content:space-between; font-size:0.85rem;">
+                        <span style="color:{COLOR_TEXT_MUT};">Health Index:</span>
+                        <strong style="color:{s_color};">{dev_row['health_score']:.1f}%</strong>
+                    </div>
+                    <div style="margin-top:5px; display:flex; justify-content:space-between; font-size:0.85rem;">
+                        <span style="color:{COLOR_TEXT_MUT};">Fault Class:</span>
+                        <strong style="color:{COLOR_TEXT_PRI};">{dev_row['predicted_class']} ({'Hardware Fail' if dev_row['predicted_class'] == 2 else 'Link Degradation' if dev_row['predicted_class'] == 1 else 'Normal'})</strong>
+                    </div>
+                    <div style="margin-top:5px; display:flex; justify-content:space-between; font-size:0.85rem;">
+                        <span style="color:{COLOR_TEXT_MUT};">Reported Severity:</span>
+                        <strong style="color:{COLOR_TEXT_PRI};">{dev_row['severity_type']}</strong>
+                    </div>
+                    <div style="margin-top:10px; border-bottom:1px solid {COLOR_BORDER}; padding-bottom:5px;"></div>
+                    <div style="margin-top:10px; font-size:0.75rem; color:{COLOR_TEXT_MUT}; font-weight:bold;">RESOURCE & EVENT LOGS</div>
+                    <div style="margin-top:5px; font-size:0.75rem; color:{COLOR_TEXT_PRI}; font-family:'JetBrains Mono',monospace; word-break:break-all;">
+                        {dev_row['resource_type']}<br>
+                        {dev_row['event_types']}<br>
+                        {dev_row['log_features']}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+                
+                if st.button("VIEW DETAILS / INSPECT", key="btn_inspect_map_device", use_container_width=True):
+                    st.session_state.selected_device_id = int(selected_map_dev)
+                    st.rerun()
+            else:
+                st.markdown(f"""
+                <div class="noc-panel" style="border: 1px dashed {COLOR_BORDER}; text-align:center; padding: 40px 10px;">
+                    <div style="font-size:2.5rem; color:{COLOR_TEXT_MUT}; margin-bottom:10px;">📡</div>
+                    <div style="font-size:0.85rem; color:{COLOR_TEXT_MUT};">Select a device node on the topology map to inspect live network telemetry.</div>
+                </div>
+                """, unsafe_allow_html=True)
+
         st.markdown("<br>", unsafe_allow_html=True)
         
         # 5. Device Incident List (Sorted by Health Score Ascending)
@@ -1749,9 +2535,10 @@ def render_detail_page(selected_device_id):
 
 # ROUTING & EXECUTION ENTRY POINT
 # ==============================================================================
-if __name__ == '__main__':
     if 'selected_device_id' not in st.session_state:
         st.session_state.selected_device_id = None
+    if 'selected_map_device_id' not in st.session_state:
+        st.session_state.selected_map_device_id = None
 
     # Check query parameters for node selections from iframe visualization
     try:
@@ -1760,6 +2547,12 @@ if __name__ == '__main__':
             dev_id_str = q_params["inspect_device_id"]
             if dev_id_str:
                 st.session_state.selected_device_id = int(dev_id_str)
+                st.query_params.clear()
+                st.rerun()
+        if "selected_map_device_id" in q_params:
+            dev_id_str = q_params["selected_map_device_id"]
+            if dev_id_str:
+                st.session_state.selected_map_device_id = int(dev_id_str)
                 st.query_params.clear()
                 st.rerun()
     except Exception as e:
